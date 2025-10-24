@@ -1,0 +1,126 @@
+#Include "tlpp-core.th"
+
+/* Incluir na tela de aprovação da SC o nome de quem abriu a SC
+SC TVSAQR
+*
+*/
+User Function M110STTS() As Logical
+Local lValidSC := GetMV("IN_APROVSC", .F., .T.) As Logical 
+Local nOper := ParamIXB[2] As Numeric
+
+    If lValidSC .And. nOper == 1
+        Processa({|| BloqueiaSC() }, "Aguarde", "Processando")
+    End
+Return .T.
+
+/**/
+Static Function BloqueiaSC() As Logical
+Local aSC1 := SC1->(GetArea()) As Array
+Local aSAI := SAI->(GetArea()) As Array
+Local aSAL := SAL->(GetArea()) As Array
+Local aDBM := DBM->(GetArea()) As Array
+Local aArea := GetArea() As Array
+Local cAlias := GetNextAlias() As Character
+Local cNumSC := ParamIXB[1] As Character
+Local nTotal := 0 As Numeric
+//Local lCopia := ParamIXB[3] As Logical
+
+    BeginSql Alias cAlias
+    %NoParser%
+
+    SELECT A.R_E_C_N_O_ RECNOSAI, B.R_E_C_N_O_ RECNOSAL 
+      FROM %Table:SAI% A (NOLOCK)
+      JOIN %Table:SAL% B (NOLOCK) ON AL_FILIAL = AI_FILIAL 
+                            AND AL_USER = AI_XUSRAPR 
+                            AND AL_DOCSC = 'T' 
+                            AND B.%NotDel%
+     WHERE AI_FILIAL = %xFilial:SAI%
+       AND AI_USER = %Exp:__cUserId%
+       AND A.%NotDel%
+
+    EndSql
+
+    If !(cAlias)->(Eof())
+        DBSelectArea("SC1")
+        DBSetOrder(1)
+        DBGoTop()
+
+        Begin Transaction
+            If DBSeek(FWxFilial("SC1") + cNumSC)
+                DBSelectArea("SAI")
+                SAI->(DBGoTo((cAlias)->RECNOSAI))
+
+                DBSelectArea("SAL")
+                SAL->(DBGoTo((cAlias)->RECNOSAL))
+
+                DBSelectArea("DBM")
+
+                While FWxFilial("SC1") + cNumSC == SC1->C1_FILIAL + SC1->C1_NUM .And. !SC1->(Eof())
+                    Reclock("SC1", .F.)
+                        SC1->C1_APROV := "B"
+                    SC1->(MSUnlock())
+                    SC1->(DBCommit())
+
+                    nTotal += SC1->C1_TOTAL
+
+                    Reclock("DBM", .T.)
+                        DBM->DBM_FILIAL := FWxFilial("DBM")
+                        DBM->DBM_NUM := SC1->C1_NUM
+                        DBM->DBM_ITEM := SC1->C1_ITEM
+                        DBM->DBM_TIPO := "SC"
+                        DBM->DBM_USER := SAL->AL_USER
+                        DBM->DBM_APROV := "2"
+                        DBM->DBM_GRUPO := SAL->AL_COD
+                        DBM->DBM_ITGRP := SAL->AL_ITEM
+                        DBM->DBM_USAPRO := SAL->AL_APROV
+                        DBM->DBM_VALOR := SC1->C1_TOTAL
+                    DBM->(MSUnlock())
+                    DBM->(DBCommit())
+
+                    SC1->(DBSkip())
+                End
+
+                SC1->(DBSeek(FWxFilial("SC1") + cNumSC))
+
+                Reclock("SCR", .T.)
+                    SCR->CR_FILIAL := FWxFilial("SCR")
+                    SCR->CR_NUM := cNumSC
+                    SCR->CR_TIPO := "SC"
+                    SCR->CR_USER := SAL->AL_USER
+                    SCR->CR_APROV := SAL->AL_APROV
+                    SCR->CR_GRUPO := SAL->AL_COD
+                    SCR->CR_ITGRP := SAL->AL_ITEM
+                    SCR->CR_NIVEL := SAL->AL_NIVEL
+                    SCR->CR_STATUS := "02"
+                    SCR->CR_EMISSAO := Date()
+                    SCR->CR_TOTAL := nTotal
+                    SCR->CR_VALLIB := 0
+                    SCR->CR_MOEDA := SC1->C1_MOEDA
+                    SCR->CR_TXMOEDA := 1
+                    SCR->CR_PRAZO := Date() + 99
+                    SCR->CR_AVISO := Date()
+                    SCR->CR_ESCALON := .F.
+                    SCR->CR_ESCALSP := .F.
+                    SCR->CR_XSOLIC := SC1->C1_SOLICIT
+                SCR->(MSUnlock())
+                SCR->(DBCommit())
+            End
+        End Transaction
+    End
+
+    If Select(cAlias) > 0
+        (cAlias)->(DbCloseArea())
+    End
+
+    FWRestArea(aDBM)
+    FWRestArea(aSC1)
+    FWRestArea(aSAI)
+    FWRestArea(aSAL)
+    FWRestArea(aArea)
+
+    FwFreeArray(aSC1)
+    FwFreeArray(aDBM)
+    FwFreeArray(aSAI)
+    FwFreeArray(aSAL)
+    FwFreeArray(aArea)
+Return .T.
